@@ -2193,8 +2193,18 @@ def refresh_active_symbols(initial: bool = False):
     try:
         # v7.3.1: безопасный load_markets с retry на 418
         # При initial=True уже вызван в startup_sequence, тут можно пропустить
-        if not initial:
-            _safe_load_markets(force_reload=True)  # v7.3.9.4: reload раз в час — новые листинги
+        # v7.3.9.7: УБРАН reload=True из hourly refresh — он был причиной
+        # всплеска памяти +100МБ каждый час (виден в MEMDIAG: RSS 305→405 на
+        # iter 52-53). reload=True форсил ccxt заново скачать и распарсить ВСЕ
+        # ~1400 рынков Binance Futures (~100МБ), при этом старый exchange.markets
+        # держался в памяти → пиковое удвоение → OOM на 512МБ Render.
+        # Теперь список активных монет строится из уже загруженного
+        # exchange.markets (load_markets был один раз на старте). Новые листинги
+        # подхватятся при следующем рестарте бота — это редкое событие, а
+        # стабильность памяти важнее. Нулевой всплеск.
+        if not initial and not exchange.markets:
+            # подстраховка: если markets почему-то пусты — загрузить (без reload)
+            _safe_load_markets(force_reload=False)
         # v7.3.7: tickers из WS-cache (или REST fallback при initial=True,
         # когда WS ещё не подключился — нам нужны volume сразу для warmup).
         if initial:
@@ -2640,7 +2650,7 @@ def analyst_loop():
     # История ATR Map score для подсчёта mature_bars (сколько баров подряд score≥60).
     # Ключ: symbol → deque последних 12 score'ов (24h при cycle 6-7 мин).
     atr_map_score_history: dict = {}
-    logging.info("Аналитик Binance v7.3.9.6 (memory diagnostics) запущен.")
+    logging.info("Аналитик Binance v7.3.9.7 (reload spike fix - root cause) запущен.")
 
     # v7.3: ждём окончания прогрева истории
     while warmup_state['phase'] != 'done':
@@ -3299,7 +3309,7 @@ def health():
     else:
         tickers_str = "❌ disconnected"
 
-    return (f"✅ OK | Binance v7.3.9.6 (memory diagnostics)\n"
+    return (f"✅ OK | Binance v7.3.9.7 (reload spike fix - root cause)\n"
             f"Uptime: {uptime}\n"
             f"Итераций: {bot_status['iterations']}\n"
             f"Ошибок: {bot_status['errors']}\n"
